@@ -1,0 +1,196 @@
+---
+title: "Project_non_parametric_model"
+author: "Andrea Bello"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Libraries
+```{r echo = T, results = 'hide'}
+library(tidyverse)
+library(ggplot2)
+library(ggcorrplot)
+library(dplyr)
+library(corrplot)
+library(gridExtra)
+library(grid)
+library(GGally)
+library(fastDummies)
+library(stringr)
+library(lmtest) 
+library(forecast)
+library(DIMORA)
+library(fpp2)
+# library(kableExtra)
+```
+
+
+# Load and visualize the data-set
+```{r data_set}
+energy <- read.csv("IT_NORD_60min.csv")
+head(energy)
+```
+# Handle missing values (NAs)
+In the dataset some variables have missing values. To address the problem, we should know the amount of NAs and the information of the variables containing them. In some cases, the mode/median/mean imputation can be applied, while in other situations the variable can be removed from the dataset. 
+The proportion of missing values for every column is shown below.
+```{r NAs}
+na_counts = (round(colSums(is.na(energy))/nrow(energy), 4))
+na_counts[na_counts>0]
+```
+```{r NA_0}
+# Values of 0.0001 suggests that we can use the median imputation without
+# worrying to check for the cor test, while 0.0027 of IT_NORD_price_ahead is
+# firstly treated in the same way.
+IT_NORD_load_actual_entsoe_transparency_median <- median(IT_NORD_load_actual_entsoe_transparency)
+na_vector <- is.na(energy$IT_NORD_load_actual_entsoe_transparency)
+energy$IT_NORD_load_actual_entsoe_transparency[na_vector] <- IT_NORD_load_actual_entsoe_transparency_median
+
+IT_NORD_load_forecast_entsoe_transparency_median <- median(IT_NORD_load_forecast_entsoe_transparency)
+na_vector <- is.na(energy$IT_NORD_load_forecast_entsoe_transparency)
+energy$IT_NORD_load_forecast_entsoe_transparency[na_vector] <- IT_NORD_load_forecast_entsoe_transparency_median
+
+IT_NORD_price_day_ahead_median <- median(IT_NORD_price_day_ahead)
+na_vector <- is.na(energy$IT_NORD_price_day_ahead)
+energy$IT_NORD_price_day_ahead[na_vector] <- IT_NORD_price_day_ahead_median
+```
+
+
+```{r NA_1}
+# Calculate correlation before removing NAs
+cor_before <- cor.test(energy$IT_NORD_price_day_ahead, as.integer(energy$IT_NORD_solar_generation_actual), na.omit = TRUE)$estimate
+# Display the correlation
+print(paste("Correlation before NA removal:", cor_before))
+
+# Assign the median to missing values
+IT_NORD_solar_generation_actual_median <- median(IT_NORD_solar_generation_actual)
+na_vector <- is.na(energy$IT_NORD_solar_generation_actual)
+energy$IT_NORD_solar_generation_actual[na_vector] <- IT_NORD_solar_generation_actual_median
+
+# Calculate correlation after NA removal and replacement
+cor_after <- cor.test(energy$IT_NORD_price_day_ahead, as.integer(energy$IT_NORD_solar_generation_actual))$estimate
+# Display the correlation after NA removal
+print(paste("Correlation after NA removal:", cor_after))
+
+
+# IT_NORD_wind_onshore_generation_actual
+# Calculate correlation before removing NAs
+cor_before <- cor.test(energy$IT_NORD_price_day_ahead, as.integer(energy$IT_NORD_wind_onshore_generation_actual), na.omit = TRUE)$estimate
+# Display the correlation
+print(paste("Correlation before NA removal:", cor_before))
+
+# Assign the median to missing values
+IT_NORD_wind_onshore_generation_actual_median <- median(IT_NORD_wind_onshore_generation_actual)
+na_vector <- is.na(energy$IT_NORD_wind_onshore_generation_actual)
+energy$IT_NORD_wind_onshore_generation_actual[na_vector] <- IT_NORD_wind_onshore_generation_actual_median
+
+# Calculate correlation after NA removal and replacement
+cor_after <- cor.test(energy$IT_NORD_price_day_ahead, as.integer(energy$IT_NORD_wind_onshore_generation_actual))$estimate
+# Display the correlation after NA removal
+print(paste("Correlation after NA removal:", cor_after))
+```
+The cor test is not actually necessary due to the low percentage of NAs compared
+to the amount of fields with values. By using the median, we aim at minimizing the potential influence of outliers on the imputed values.
+```{r}
+print(energy)
+```
+# Monthly data
+```{r monthly}
+# Convert timestamps to datetime
+energy$cet_cest_timestamp <- as.POSIXct(energy$cet_cest_timestamp, format="%Y-%m-%dT%H:%M:%S%z")
+
+# Aggregate energy to monthly
+monthly_energy <- energy %>%
+  mutate(month = floor_date(cet_cest_timestamp, "month")) %>%
+  group_by(month) %>%
+  summarize(
+    total_load = sum(IT_NORD_load_actual_entsoe_transparency, na.rm = TRUE),
+    total_load_forecast = sum(IT_NORD_load_forecast_entsoe_transparency, na.rm = TRUE),
+    total_solar_generation = sum(IT_NORD_solar_generation_actual, na.rm = TRUE),
+    total_wind_generation = sum(IT_NORD_wind_onshore_generation_actual, na.rm = TRUE),
+    total_price_day_ahead = sum(IT_NORD_price_day_ahead, na.rm = TRUE),
+  )
+
+# View the monthly energy
+print(monthly_energy)
+
+```
+```{r plot_1}
+qqnorm(monthly_energy$total_price_day_ahead, pch = 1, frame = FALSE)
+qqline(monthly_energy$total_price_day_ahead, col = "steelblue", lwd = 2)
+```
+Even if the line is not perfect, it follows a distribution as normal as possible.
+```{r}
+outliers=boxplot.stats(monthly_energy$total_price_day_ahead)$out
+length(outliers)/length(monthly_energy$total_price_day_ahead)
+```
+In this case the outliers account more than 5%, but because the distribution 
+doesn't deviate substantially from the normal distribution, we decided to remove
+them.
+```{r}
+# trimming only values that are more extreme than 2.5 and 97.5 percenteline
+lower_bound <- quantile(monthly_energy$total_price_day_ahead, 0.025)
+upper_bound <- quantile(monthly_energy$total_price_day_ahead, 0.975)
+outlier_ind <- which(monthly_energy$total_price_day_ahead < lower_bound | monthly_energy$total_price_day_ahead > upper_bound)
+energy_temp <- monthly_energy[- outlier_ind,]
+
+qqnorm(energy_temp$total_price_day_ahead, pch = 1, frame = FALSE)
+qqline(energy_temp$total_price_day_ahead, col = "steelblue", lwd = 2)
+```
+```{r}
+# Backup used for testing
+backup = monthly_energy
+```
+
+```{r}
+#Local regression
+library(sm)
+x <- 1:70
+y <- monthly_energy$total_price_day_ahead
+plot(x,y)
+sm.regression(x, y, h = 10, add = T)
+
+sm.regression(x, y, h = 2, add = T, ngrid=200, col=2)
+
+```
+
+```{r loess}
+#Loess (no library required, default tool of R)
+plot(x, y, xlab="month", ylab="price day ahead")
+lo1 <- loess.smooth(x,y) 
+#default span= 0.75
+lines(lo1)
+# we try with other smoothing parameters 'span' 
+lo2 <- loess.smooth(x, y, span=0.9)
+lines(lo2,col=2)
+lo3 <- loess.smooth(x, y, span=0.4)
+lines(lo3,col=3)
+```
+```{r splines}
+#######Regression splines (cubic splines)
+#install.packages("splines")
+library(splines)
+#
+plot(x, y, xlab="month", ylab="price day ahead")
+#
+#we select and identify the knots 'equispaced'
+xi<-seq(min(x), max(x), length=4)
+
+#----- Model (2 internal knots)
+m1<-lm(y ~ bs(x, knots=xi[2:(length(xi)-1)], degree=3))
+
+###---- for graphical reasons select 200 points where to evaluate the model
+xxx<-seq(min(x),max(x),length=200)
+
+#Make predictions by using the 'xxx' points
+fit1<-predict(m1, data.frame(x=xxx))
+#########
+plot(x,y,xlab="month", ylab="price day ahead")
+lines(xxx,fit1,col=2)
+
+######vertical lines to indicate the knots
+abline(v=xi[2], lty=3)
+abline(v=xi[3], lty=3)
+```

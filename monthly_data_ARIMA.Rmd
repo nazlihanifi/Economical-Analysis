@@ -1,0 +1,423 @@
+---
+title: "BEFD_models"
+author: "Dafina Berisha"
+date: "`r Sys.Date()`"
+output: pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Time-Series Analysis of North Italy information about electricity load, price, and renewable energy generation
+
+```{r,include=FALSE }
+library(readxl)
+library(lmtest) 
+library(forecast)
+library(DIMORA)
+library(ggplot2)
+library(readr)
+library(dplyr)
+library(lubridate)
+```
+
+```{r,include=FALSE}
+setwd("/Users/dafinaberisha/Documents/Materiale_per_UniPD/Business, Economic and Financial Data")
+data <-read.csv('IT_NORD_60min.csv')
+str(data)
+View(data)
+```
+
+```{r}
+missing_columns <- colSums(is.na(data))
+print(missing_columns)
+data = na.omit(data)
+
+attach(data)
+str(data)
+```
+
+
+# IT_NORD_60min Dataset 
+
+The dataset contains hourly data in Italy from 2014-12-31T23:00:00Z to 2020-09-30T23:00:00Z. It includes information about electricity load, price, and renewable energy generation. 
+
+There are 7 columns:
+
+-   *utc_timestamp*: The timestamp in Coordinated Universal Time.
+
+-   *cet_cest_timestamp*: The timestamp in Central European Time or Central European Summer Time.
+
+-   *IT_NORD_load_actual_entsoe_transparency*:  Actual electricity load (demand) in the IT-NORD region as reported by ENTSO-E Transparency. This represents the total electrical power demand in this region at the given time.
+
+-   *IT_NORD_load_forecast_entsoe_transparency*: Forecasted electricity load in the IT-NORD region as reported by ENTSO-E Transparency. This is an estimation of the expected electricity demand for the region.
+
+-   *IT_NORD_price_day_ahead*: The day-ahead electricity price for the IT-NORD region. Day-ahead prices are typically determined in advance based on supply and demand predictions.
+
+-   *IT_NORD_solar_generation_actual*: The actual solar power generation data for the IT-NORD region.
+
+-   *IT_NORD_wind_onshore_generation_actual*: The actual onshore wind power generation data for the IT-NORD region.
+
+```{r}
+
+# Convert timestamps to datetime
+data$cet_cest_timestamp <- as.POSIXct(data$cet_cest_timestamp, format="%Y-%m-%dT%H:%M:%S%z")
+
+# Aggregate data to monthly
+monthly_data <- data %>%
+  mutate(month = floor_date(cet_cest_timestamp, "month")) %>%
+  group_by(month) %>%
+  summarize(
+    total_load = sum(IT_NORD_load_actual_entsoe_transparency, na.rm = TRUE),
+    total_load_forecast = sum(IT_NORD_load_forecast_entsoe_transparency, na.rm = TRUE),
+    total_solar_generation = sum(IT_NORD_solar_generation_actual, na.rm = TRUE),
+    total_wind_generation = sum(IT_NORD_wind_onshore_generation_actual, na.rm = TRUE),
+    total_price_day_ahead = sum(IT_NORD_price_day_ahead, na.rm = TRUE),
+  )
+
+# View the monthly data
+print(monthly_data)
+
+```
+
+```{r}
+# Outliers
+
+summary(monthly_data)
+# Boxplot to visually inspect outliers
+boxplot(monthly_data$total_solar_generation, main="Boxplot for Outliers Detection", xlab="IT_NORD_solar_generation_actual")
+boxplot(monthly_data$total_load, main="Boxplot for Outliers Detection", xlab="IT_NORD_load_actual_entsoe_transparency")
+boxplot(monthly_data$total_price_day_ahead, main="Boxplot for Outliers Detection", xlab="IT_NORD_price_day_ahead")
+boxplot(monthly_data$total_wind_generation, main="Boxplot for Outliers Detection", xlab="IT_NORD_wind_onshore_generation_actual")
+```
+```{r}
+# Identifying outliers using IQR
+# Solar generation no outliers
+
+# Calculate IQR and bounds for all variables
+price_IQR <- IQR(monthly_data$total_load, na.rm = TRUE)
+wind_IQR <- IQR(monthly_data$total_wind_generation, na.rm = TRUE)
+
+price_Q1 <- quantile(monthly_data$total_load, 0.25, na.rm = TRUE)
+price_Q3 <- quantile(monthly_data$total_load, 0.75, na.rm = TRUE)
+wind_Q1 <- quantile(monthly_data$total_wind_generation, 0.25, na.rm = TRUE)
+wind_Q3 <- quantile(monthly_data$total_wind_generation, 0.75, na.rm = TRUE)
+
+# Removing outliers across all specified variables
+data_clean_monthly <- subset(monthly_data, 
+                     monthly_data$total_load >= (price_Q1 - 1.5 * price_IQR) & monthly_data$total_load <= (price_Q3 + 1.5 * price_IQR) &
+                     monthly_data$total_wind_generation >= (wind_Q1 - 1.5 * wind_IQR) & monthly_data$total_wind_generation <= (wind_Q3 + 1.5 * wind_IQR))
+
+# Boxplots without outliers
+boxplot(data_clean_monthly$total_load, main="Boxplot without Outliers", xlab="IT_NORD_load_actual_entsoe_transparency")
+boxplot(data_clean_monthly$total_wind_generation, main="Boxplot without Outliers", xlab="IT_NORD_wind_onshore_generation_actual")
+```
+
+
+### Models on all monthly data for IT_NORD_average_price_day_ahead
+
+```{r}
+
+total_price_day_ahead <- data_clean_monthly$total_price_day_ahead
+
+plot(total_price_day_ahead, ylab="IT_NORD_price_day_ahead",xlab="date")
+tsdisplay(total_price_day_ahead)
+
+##first difference
+diff1<- diff(total_price_day_ahead) 
+###seasonal difference
+diff4<- diff(total_price_day_ahead, lag=4) 
+tsdisplay(diff1)
+tsdisplay(diff4)
+
+####first Arima model 
+a1<- Arima(total_price_day_ahead, order=c(0,1,1), seasonal=c(0,0,1))
+fit1<- fitted(a1)
+
+plot(total_price_day_ahead)
+lines(fit1, col=2)
+
+f1<- forecast(a1)
+plot(f1)
+
+r1<- residuals(a1)
+tsdisplay(r1) 
+
+
+#####second Arima model
+a2<- Arima(total_price_day_ahead, order=c(0,1,1), seasonal=c(0,0,2))
+fit2<- fitted(a2)
+
+plot(total_price_day_ahead)
+lines(fit2, col=2)
+
+f2<- forecast(a2)
+plot(f2)
+
+r2<- residuals(a2)
+tsdisplay(r2) 
+
+
+#######third Arima model
+a3<- Arima(total_price_day_ahead, order=c(0,1,1), seasonal=c(0,1,1))
+fit3<- fitted(a3)
+
+plot(total_price_day_ahead)
+lines(fit3, col=2)
+
+f3<- forecast(a3)
+plot(f3)
+
+r3<- residuals(a3)
+tsdisplay(r3) 
+
+##########fourth Arima model 
+
+a4<- Arima(total_price_day_ahead, order=c(0,1,2), seasonal=c(0,1,1))
+fit4<- fitted(a4)
+
+plot(total_price_day_ahead)
+lines(fit4, col=2)
+
+f4<- forecast(a4)
+autoplot(f4)
+
+r4<- residuals(a4)
+tsdisplay(r4) 
+
+############fifth Arima model 
+
+auto.a<- auto.arima(total_price_day_ahead)
+auto.a
+
+autoplot(forecast(auto.a))
+checkresiduals(auto.a)
+```
+
+
+
+```{r}
+
+# AIC and BIC Comparison
+aic_values <- c(a1 = AIC(a1), a2 = AIC(a2), a3 = AIC(a3), a4 = AIC(a4), auto_a = AIC(auto.a))
+bic_values <- c(a1 = BIC(a1), a2 = BIC(a2), a3 = BIC(a3), a4 = BIC(a4), auto_a = BIC(auto.a))
+
+# Print AIC and BIC values
+print(aic_values)
+print(bic_values)
+
+```
+Based on the AIC and BIC values, the first three models (a1, a2, a3) have the same AIC value, which is the lowest among the five models. This suggests that these three models have a similar fit to the data, and are marginally better than a4 and auto_a. Again, the first three models (a1, a2, a3) have identical BIC values, which are lower than those of a4 and auto_a. This reinforces the suggestion that a1, a2, and a3 might be preferable in terms of a balance between model fit and complexity.
+
+```{r}
+checkresiduals(a1)
+```
+So, the Box-Ljung test for the a1 model indicates that the residuals can be considered random, implying that the model has adequately captured the underlying structure of the data and the residuals are behaving like white noise. This is a good sign, indicating that the a1 model is appropriate for our data.
+
+The model chosen is an ARIMA(0,1,1)(0,0,1) and its AIC value is 1158.319 The residuals of this model are very good, the ACF contains only non significant spikes and the time plot resembles the behavior of tha White Noise time series.
+
+The ARIMA model described as ARIMA(0,1,1)(0,0,1) is a seasonal ARIMA model, often denoted as SARIMA.
+
+One problem can be that we do not have an R object connected to this model, so we cannot apply the forecast function to it or see the AIC value of it. To solve this issue we can use an almost equivalent way of obtaining this model that returns as an R object that can give us forecast and performance information about the model. We can fit a SARMAX model in which we use the fitted values of the ARIMA Model as an external predictor.
+
+```{r}
+
+sarmax <- auto.arima(total_price_day_ahead,xreg=fit1)
+summary(sarmax)
+
+```
+Regression with ARIMA(0,0,0) errors: This model is essentially a linear regression model with an ARIMA(0,0,0) error structure. ARIMA(0,0,0) implies that there are no autoregressive (AR) or moving average (MA) components in the model, and no differencing (d=0). It's equivalent to white noise for the error term. MASE (Mean Absolute Scaled Error): Close to 1 (0.971657). A MASE less than 1 suggests the model is better than a naïve benchmark. ACF1 (First Autocorrelation of Errors): 0.1037159 This is low, suggesting that there is little autocorrelation in the residuals.
+
+```{r}
+
+# Plot the actual data
+plot(total_price_day_ahead, type = 'l', col = 1, ylim = c(min(total_price_day_ahead), max(total_price_day_ahead)), 
+     ylab = 'Average Price', xlab = 'Month')
+
+# Add fitted values from model1
+lines(fitted(a1), col = 2)
+
+# Add fitted values from model2
+lines(fitted(sarmax), col = 3)
+
+# Add a legend
+legend('topright', legend = c('Real Data', 'SARIMA', 'SARMAX'), 
+       col = c(1, 2, 3), lty = 1)
+
+```
+Considering the fitted values of the last two models against the real data we cannot see huge differences, they are both following very closely the data. 
+
+```{r}
+
+f5<-forecast(sarmax,xreg=fit1)
+plot(f5)
+
+```
+The forecasts of this model predict an initial decrease in the average price following the last observed data point. Shortly after, the forecasted values begin to increase. The forecast values fluctuate within a range. This fluctuation is contained within the confidence intervals, indicating that while there is uncertainty about the exact future values, the model predicts that the average price will remain within these bounds with a certain level of confidence (often 90% and 95%).
+
+The widening of the confidence intervals over time suggests that the model's uncertainty about the future values of the series increases the further out the forecast goes. This is typical in time-series forecasts because predictions become less reliable the further they are projected into the future.
+
+It's important to note that these predictions are based on the assumption that the underlying conditions of the model and the factors influencing price remain consistent with the past data that the model was trained on. Any changes in market dynamics, regulatory impacts, supply and demand shifts, or other influential factors not accounted for in the model could affect the accuracy of these forecasts.
+
+
+
+### Models on train and test data 
+
+Let's divide the data in training and test sets:
+
+1) First try -> Last 18 months in the test set. Here train -> 1:40 test -> 41:58. 
+
+
+## First case
+```{r}
+
+train <- 1:40
+test <- 41:58
+total_price_day_ahead_train <- ts(total_price_day_ahead[train], frequency=12)
+total_price_day_ahead_test<-ts(total_price_day_ahead[test], frequency=12)
+
+```
+
+Let's now consider the application of auto.arima directly on the time series:
+
+```{r}
+####first Arima model 
+a1_train<- Arima(total_price_day_ahead_train, order=c(0,1,1), seasonal=c(0,0,1))
+fit1_train <- fitted(a1_train)
+
+plot(total_price_day_ahead_train)
+lines(fit1_train, col=2)
+
+f1_train<- forecast(a1_train)
+plot(f1_train)
+
+r1_train<- residuals(a1_train)
+tsdisplay(r1_train) 
+```
+## Forecast and Confidence Intervals:
+
+The solid blue line that appears after the historical data is the forecasted values from the ARIMA model.
+The shaded areas around the forecast represent confidence intervals for the forecast, with darker shades indicating higher confidence (usually 95%) and lighter shades representing lower confidence (possibly 80% or 90%). These intervals show the range of possible future values around the forecast, reflecting uncertainty in the prediction.
+
+This model is capable of capturing both short-term (MA part) and seasonal patterns (SMA part).
+
+The forecast shows a flat trend, meaning the model does not predict any significant change in the level of the series moving forward. This is typical for ARIMA models with a differencing component but without significant AR or MA components to capture trends or momentum.
+
+```{r}
+checkresiduals(a1_train) 
+```
+In summary, the Ljung-Box test suggests that the ARIMA(0,1,1)(0,0,1) model's residuals do not show significant autocorrelation, and the model seems to be a reasonable fit to the data in terms of capturing its autocorrelation structure.
+
+The p-value is 0.3454. Since this value is above common significance levels (like 0.05 or 0.01), we do not have enough evidence to reject the null hypothesis of the Ljung-Box test, which is that the residuals are independently distributed (i.e., no autocorrelation). This implies that the model does not exhibit signs of significant autocorrelation in the residuals at the first 10 lags.
+
+```{r}
+#SARMAX with fitted model as the external predictor
+sarmax_train<-auto.arima(total_price_day_ahead_train,xreg=fit1_train)
+summary(sarmax_train)
+```
+The results provided are from fitting a regression model with ARIMA(0,0,0) errors to a time series called total_price_day_ahead_train, which likely represents the total electricity price for a month. This model is essentially a linear regression model without any autoregressive or moving average components, as indicated by the ARIMA(0,0,0) specification.
+The standard errors are relatively small in comparison to the coefficients, suggesting that the coefficients are statistically significant.
+
+ME (Mean Error): Virtually zero, indicating no bias in the predictions (the model is not systematically over- or under-predicting).
+MPE (Mean Percentage Error): The value is -2.459779, suggesting a small bias towards under-prediction.
+MASE (Mean Absolute Scaled Error): The value is 0.5356138, indicating the model performs better than a naïve benchmark.
+ACF1 (First Autocorrelation of Errors): The value is 0.1239108, which is relatively low, suggesting that there is a small amount of autocorrelation in the residuals.
+
+So, the train model seems to provide a statistically significant fit to the data, with the predictors showing significance given the relatively small standard errors.
+
+```{r}
+#Fitted values vs real data 
+plot(total_price_day_ahead_train, type = 'l', col = 1, ylim = c(min(total_price_day_ahead_train), max(total_price_day_ahead_train)), 
+     ylab = 'Total Price', xlab = 'Month')
+
+# Add fitted values from model1
+lines(fitted(a1_train), col = 2)
+
+# Add fitted values from model2
+lines(fitted(sarmax_train), col = 3)
+
+# Add a legend
+legend('topright', legend = c('Real Data', 'SARIMA', 'SARMAX'), 
+       col = c(1, 2, 3), lty = 1)
+```
+Considering the fitted values of the last two models against the real train data we cannot see huge differences, they are both following the data, even though the closeness is not as good as in the hole data set. 
+
+```{r}
+#Forecasts 
+f5_train <- forecast(sarmax_train, xreg=fit1_train)
+plot(f5_train)
+```
+The plot shows forecasts generated from a regression model with ARIMA(0,0,0) errors, which implies that the model assumes no autoregressive terms, no differencing, and no moving average terms—essentially, that the error terms are white noise.
+
+The forecast shows a continuing trend that follows the general pattern of the historical data, suggesting the regression model has identified underlying factors that are expected to continue driving similar behavior in the future.
+
+The shaded areas around the forecasted values represent confidence intervals, with darker shades likely indicating a higher level of confidence (typically 95%) and lighter shades indicating a lower level of confidence (possibly 90% or 80%). These intervals represent the uncertainty in the forecast; the further out the forecast goes, the wider these intervals tend to be, which reflects increasing uncertainty.
+
+### Forecasts and predictions 
+
+Here we report the usual metrics for the predictions on the test set:
+
+```{r}
+accuracy_metrics1 <- accuracy(f1_train, total_price_day_ahead[test])
+
+print(accuracy_metrics1)
+```
+
+```{r}
+accuracy_metrics2 <- accuracy(f5_train, total_price_day_ahead[test])
+
+print(accuracy_metrics2)
+
+```
+## Comparative Analysis
+
+Error Metrics (ME, RMSE, MAE): Model SARMAX has lower RMSE and MAE in both training and test sets, indicating better predictive accuracy. The ME is significantly lower for SARMAX in the test set.
+
+Percentage Errors (MPE, MAPE): SARMAX has lower absolute values in both MPE and MAPE for training and test sets, indicating better performance in terms of percentage errors.
+
+MASE: SARMAX has lower MASE values in both training and test sets, suggesting it performs closer to a naive model compared to Model 2.
+
+ACF1: SARMAX shows a higher ACF1 in the training set, suggesting some autocorrelation in residuals, while SARIMA's ACF1 is lower, indicating less autocorrelation.
+
+Generalization to Test Set: SARMAX shows a smaller increase in errors from training to test set compared to SARIMA, suggesting better generalization.
+
+Overall, SARMAX appears to be the better model, considering the lower error metrics (RMSE, MAE), lower percentage errors (MPE, MAPE), and lower MASE values for both the training and test sets. It also seems to generalize better to unseen data, as indicated by the smaller increase in errors from the training to the test set. While SARIMA does show some autocorrelation in residuals, this issue is outweighed by its overall superior performance metrics compared to SARMAX.
+
+
+### Conclusions
+
+# Predictive Accuracy and Reliability
+SARMAX demonstrates relatively lower error metrics (like RMSE and MAE) compared to other models, indicating a reasonable level of accuracy in predicting day-ahead electricity prices.
+The smaller increase in errors from training to test sets suggests that the model generalizes well to unseen data, which is crucial for making reliable predictions in a dynamic market environment.
+
+# Financial Implications
+Accurate day-ahead price predictions are vital for optimizing bidding strategies in electricity markets. Better predictions can lead to more profitable bidding decisions.
+Inaccurate predictions, even by small margins, can lead to significant financial impacts due to the scale of electricity trading. While our model is relatively accurate, any error can still have substantial financial implications.
+
+# Risk Management
+Predicting electricity prices with higher accuracy helps in managing risks associated with price volatility. This can aid in devising strategies to hedge against adverse price movements.
+The model's ability to capture trends and react to market changes can be crucial for short-term risk management strategies.
+
+# Operational Decision Making
+Accurate price forecasts enable better planning for electricity purchases, sales, and grid management.
+For energy producers and consumers, understanding future price trends aids in optimizing generation schedules and consumption patterns.
+
+# Market Dynamics Understanding
+The model's performance could reflect its capability to capture complex market dynamics like supply-demand interactions, policy changes, and economic factors.
+Continuous monitoring and model updating are necessary to adapt to market shifts and regulatory changes.
+
+# Strategic Planning
+Long-term business strategies can be informed by the model's outputs, particularly in terms of investment in infrastructure, renewable energy integration, and market participation strategies.
+Insights from the model can guide decisions on capacity expansion, energy storage solutions, and demand response initiatives.
+
+# Compliance and Reporting
+Accurate forecasting models are essential for compliance with market regulations and for transparent reporting to stakeholders.
+Inaccurate forecasts might lead to regulatory challenges, especially in tightly regulated electricity markets.
+
+# Conclusion
+SARMAX, with its relatively lower error rates and better generalization to unseen data, seems to provide a reliable foundation for making informed decisions in the electricity market. However, it's important to continuously evaluate and update the model to maintain its accuracy and relevance, considering the rapidly changing nature of energy markets. The model's predictions should be integrated with a comprehensive risk management strategy and be constantly scrutinized for potential improvements and adjustments.
+
+
+
+

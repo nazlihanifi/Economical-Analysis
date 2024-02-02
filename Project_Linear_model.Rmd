@@ -1,0 +1,104 @@
+---
+title: "Test"
+author: "Andrea Bello"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Libraries
+```{r echo = T, results = 'hide'}
+library(tidyverse)
+library(ggplot2)
+library(ggcorrplot)
+library(dplyr)
+library(corrplot)
+library(gridExtra)
+library(grid)
+library(GGally)
+library(fastDummies)
+library(stringr)
+library(lmtest) 
+library(forecast)
+library(DIMORA)
+library(fpp2)
+# library(kableExtra)
+```
+
+# Load the data-set
+```{r dataset, results = FALSE, message=FALSE}
+db <- read_csv("IT_NORD_60min.csv")
+str(db)
+```
+
+# Assign the mode to missing values
+```{r}
+IT_NORD_price_day_ahead_nas <- na.omit(db$IT_NORD_price_day_ahead)
+na_vector <- is.na(db$IT_NORD_price_day_ahead)
+db$IT_NORD_price_day_ahead[na_vector] <- IT_NORD_price_day_ahead_nas
+```
+
+# Create the variable 'nord'
+```{r}
+nord <- db$IT_NORD_price_day_ahead
+str(nord)
+```
+
+# Create a variable time 'tt'
+```{r}
+tt<- 1:NROW(db)
+str(tt)
+plot(tt, nord, xlab="Time", ylab="Prices")
+```
+# Compute Auto-Correlation with acf
+```{r}
+acf(nord)
+```
+
+# Fit a linear regression model 
+```{r}
+fit1 <- lm(nord~ tt)
+summary(fit1)
+```
+
+
+# Plot of the model
+```{r}
+plot(tt, nord, xlab="Time", ylab="Prices")
+abline(fit1, col=3)
+```
+
+# Check the residuals? are they autocorrelated? Test of DW
+```{r}
+dwtest(fit1)
+```
+
+# Check the residuals
+```{r}
+resfit1<- residuals(fit1)
+plot(resfit1, xlab="Time", ylab="residuals" )
+```
+
+# Let us do the same with a linear model for time series, so we transform the data into a 'ts' object
+```{r}
+nord.ts <- ts(nord, frequency = 4)
+ts.plot(nord.ts, type="o")
+```
+
+# We fit a linear model with the tslm function
+```{r}
+fitts<- tslm(nord.ts~trend)
+```
+
+# Obviously it gives the same results of the first model
+```{r}
+summary(fitts)
+```
+
+```{r}
+dwtest(fitts)
+```

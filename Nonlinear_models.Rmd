@@ -1,0 +1,175 @@
+---
+title: "Nonlinear Models"
+author: "Dafina Berisha"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+library(readxl)
+library(lmtest) 
+library(forecast)
+library(DIMORA)
+library(ggplot2)
+library(readr)
+library(dplyr)
+library(lubridate)
+```
+
+
+```{r}
+setwd("/Users/dafinaberisha/Documents/Materiale_per_UniPD/Business, Economic and Financial Data")
+data1 <-read.csv('IT_NORD_60min.csv')
+str(data1)
+View(data1)
+```
+```{r}
+missing_columns <- colSums(is.na(data1))
+print(missing_columns)
+data = na.omit(data1)
+
+attach(data)
+str(data)
+```
+```{r}
+Time = 1:NROW(data) 
+```
+
+### Nonlinear models for IT_NORD_price_day_ahead
+
+```{r}
+price_day_ahead <- data$IT_NORD_price_day_ahead[1:35200]
+
+plot(price_day_ahead, type="b")
+plot(cumsum(price_day_ahead), type="b")
+
+plot(price_day_ahead[1:500], type="b")
+plot(cumsum(price_day_ahead[1:500]), type="b")
+```
+### Bass Model (BM)
+
+```{r}
+###we estimate a simple Bass Model 
+bm_price<-BM(price_day_ahead,display = T)
+summary(bm_price)
+```
+Overall, the cumulative plot shows that the model captures the overall growth trend of the variable very well. In contrast, the instantaneous plot shows the predictions do not capture the variability of the data over time, which could be due to randomness in the data (which is normal for many real-world processes) or because the model does not include components to account for this variability.
+
+```{r}
+###prediction (out-of-sample)
+pred_bm_price<- predict(bm_price, newx=c(1:50224))
+pred_inst_price<- make.instantaneous(pred_bm_price)
+
+###plot of fitted model 
+plot(price_day_ahead, type= "b",xlab="Hour", ylab="Price for a day ahead",  pch=16, lty=3, xaxt="n", cex=0.6)
+lines(pred_inst_price, lwd=2, col=2)
+```
+In summary, the model has a very high R-squared value suggesting a good fit, but the large residuals and residual standard error indicate that there may be significant variance in the data that the model does not capture. The coefficients are statistically significant, suggesting that the predictor variables have a strong and significant relationship with the response variable.
+
+
+
+### Generalized Bass Model (GBM) with explonential shock
+
+```{r}
+# Define GBM models
+GBMe1price <- GBM(price_day_ahead, shock = "exp", nshock = 1, prelimestimates = c(4.463368e+04, 1.923560e-03, 9.142022e-02, 12,0.01,0.1))
+
+# Summarize the GBM model
+summary(GBMe1price)
+
+# Make predictions
+pred_GBMe1price <- predict(GBMe1price, newx = c(1:50224))
+pred_GBMe1price_inst <- make.instantaneous(pred_GBMe1price)
+
+# Plot cumulative data
+plot(cumsum(price_day_ahead), type = "b", xlab = "Hour", ylab = "Cumulative price", pch = 16, lty = 3, cex = 0.6, xlim = c(1, 50224), ylim = c(0, 50000))
+lines(pred_GBMe1price, lwd = 2, col = 2)
+
+# Plot hourly data
+plot(price_day_ahead, type = "b", xlab = "Hour", ylab = "Hourly prices", pch = 16, lty = 3, cex = 0.6, xlim = c(1, 50224))
+lines(pred_GBMe1price_inst, lwd = 2, col = 2)
+```
+# Residuals:
+The residuals, which are the differences between observed values and the values predicted by the model, range widely from -22,534.1 to 27,221.8. The median residual is relatively close to zero (511.1), indicating that at least 50% of your predictions are quite close to the actual values. The mean of the residuals is 419.8, which suggests there is a slight bias in the predictions, but given the large numbers involved, this is not a significant bias.
+
+# Coefficients:
+The coefficients for our model (parameters m, p, q, a1, b1, c1) have been estimated with significant p-values (indicated with ***), meaning they are statistically significant and unlikely to be zero by chance.
+The values and standard errors of these coefficients can help us understand the uncertainty in these estimates.
+
+# Model Fit:
+The residual standard error (RSE) is 10,378.34, which provides a measure of the quality of fit of the model. The lower the RSE, the better the model fits your data.
+An R-squared of 0.999597 is extremely high, suggesting that our model explains almost all the variance in the response variable. It means the model fits the data very well.
+The residual sum of squares (RSS) is 3.790746e+12, which seems high, but given the scale of the data, it is reasonable.
+
+# Plots:
+The Cumulative plot shows that the model predicts the cumulative trend of price_day_ahead quite accurately, as indicated by the predicted (red) line closely following the observed (black) data points.
+The Instantaneous plot shows significant variability in the observed data, which the model's predicted trend does not capture fully. The predicted line is relatively flat compared to the observed data's fluctuations.
+
+Overall, the GBM with an exponential shock seems to provide a very good fit for the cumulative aspect of the data we're modeling. However, the instantaneous plot indicates that the model might not capture all the nuances of the hourly changes in price. The significant p-values of the parameters suggest that they are highly relevant to the model.
+
+### GGM (Guseo Guidolin Model)
+
+```{r}
+GGM_price<- GGM(price_day_ahead, prelimestimates=c(4.463368e+04, 0.001, 0.01, 1.923560e-03, 9.142022e-02))
+summary(GGM_price)
+
+pred_GGM_price<- predict(GGM_price, newx=c(1:50224))
+pred_GGM_price_inst<- make.instantaneous(pred_GGM_price)
+
+plot(price_day_ahead, type= "b",xlab="Hour", ylab="Hourly prices",  pch=16, lty=3, cex=0.6, xlim=c(1,50224))
+lines(pred_GGM_price_inst, lwd=2, col=2)
+lines(pred_inst_price, lwd=2, col=3)
+
+###Analysis of residuals
+res_GGMprice<- residuals(GGM_price)
+acf<- acf(residuals(GGM_price))
+
+
+fit_GGMprice<- fitted(GGM_price)
+fit_GGMprice_inst<- make.instantaneous(fit_GGMprice)
+```
+# Residuals:
+The residuals range from -28,313.8 to 25,370.4 with a median of 1,092.0, indicating the spread of the residuals around the central point (the median is positive, showing that there are more overpredictions than underpredictions).
+The mean of the residuals is close to zero (193.3), suggesting that the model does not have a systematic bias in either direction.
+
+# Coefficients:
+The coefficients (κ, pc, qc, ps, qs) have been estimated with highly significant p-values (indicated by ***), implying these parameters are statistically significant and have a strong influence on the model.
+The standard errors provide an indication of the reliability of these estimates; the lower the standard error, the more reliable the estimate.
+
+# Model Fit:
+The Multiple R-squared value of 0.999423 is very high, suggesting that the model explains almost all of the variability of the response data around its mean.
+The Residual sum of squares (RSS) is 5.42488e+12, which is a measure of the overall difference between the observed data and the values predicted by the model.
+
+# Plots:
+The Cumulative plot shows the predicted cumulative price trend closely following the actual observed cumulative data, indicating a good model fit for the cumulative trend.
+The Instantaneous plot shows that the model's predicted values do not capture the high frequency and amplitude of fluctuations present in the actual data. This suggests that while the model might capture the overall trend well, it may not be as effective in capturing short-term variations.
+
+# Autocorrelation Function (ACF):
+The ACF plot is a bar chart showing the autocorrelation of the series residuals at different lags. Ideally, if the model has captured all the structure in the data, the autocorrelations for all lag times should be within the blue dotted lines (which represent confidence intervals for the ACF if the residuals are white noise).
+The plot shows that residuals have high autocorrelation at all lags, suggesting that there is still significant structure in the residuals that the model has not captured.
+
+```{r}
+# check residuals of the models
+checkresiduals(bm_price)
+checkresiduals(GBMe1price)
+checkresiduals(GGM_price)
+```
+# Conclusions:
+None of the models provide residuals that resemble white noise, which suggests that they may not be capturing all the dynamics of the price data. This could indicate that there are additional factors influencing price movements that are not accounted for by the models.
+
+These models are often used to describe the lifecycle of a product's adoption, characterized by an initial growth phase, a peak, and a decline as market saturation is approached.
+In the case of price data, the analogous interpretation might be more complex. The models could be capturing general trends in price increases or decreases but failing to account for more granular fluctuations due to market volatility, supply and demand imbalances, regulatory changes, or other factors.
+
+The significant autocorrelation in the residuals and the very low p-values from the Ljung-Box test suggest that there are temporal dependencies in the price data that the models have not captured. This could mean that prices have a memory effect or are influenced by past values more than the models can account for.
+
+Using these models to understand price dynamics, the lack of fit indicated by the residuals and the ACF suggests that other factors, possibly exogenous to the model, are at play. This means that the models, in their current form, may not be adequate for forecasting future prices or for fully understanding the drivers of price changes.
+
+Although the parameters are statistically significant, which suggests that the factors included in the model do have an impact on the prices, the overall model fit is poor. This implies that while some aspects of the price dynamics are being captured, the complete picture is not.
+
+
